@@ -59,8 +59,23 @@ func (c *XMLCommunicator) Connect(laddr, raddr, proto string) error {
     return nil
 } 
 
+// Close the connection
+func (c *XMLCommunicator) Close() error {
+    if c.conn != nil {
+        err := c.conn.Close()
+        if err != nil {
+            return err
+        } else {
+            return nil
+        }
+    } else {
+        return errors.New("The communicator does not possess a connection!")
+    }
+}
+
 // Receive the next incoming stanza from the server
 func (c *XMLCommunicator) ReceiveStanza() (stanza.Stanza, error) { 
+    // Only attempt to receive if that is possible
     if c.conn == nil {
         return nil, errors.New("The communicator does not possess a connection!")
     }
