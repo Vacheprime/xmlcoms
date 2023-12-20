@@ -1,2 +1,2 @@
 # xmlcoms
-A Go package for XML communication
+A Go package for XML communication via TCP
