@@ -8,18 +8,22 @@ import (
     "errors"
     
     "github.com/Vacheprime/xmlcoms/stanza"
+    "github.com/Vacheprime/xmlcoms/stream_elements"
 )
 
 // Struct used for managing streams of xml elements
 type XMLCommunicator struct {
     conn *net.TCPConn
     d *xml.Decoder
+    e *xml.Encoder
     l *io.LimitedReader
 }
 
+//func resetDecoder
+
 // Create a blank communicator
 func NewXMLCommunicator() *XMLCommunicator {
-    return &XMLCommunicator{conn: nil, d: nil, l: nil}
+    return &XMLCommunicator{conn: nil, d: nil, e: nil, l: nil}
 }
 
 // Initialize an XMLCommunicator from an existing connection. Useful
@@ -28,6 +32,7 @@ func NewCommunicatorFromConn(TCPConn *net.TCPConn) *XMLCommunicator {
     communicator := &XMLCommunicator{conn: TCPConn}
     communicator.l = io.LimitReader(TCPConn, 1024 * 10).(*io.LimitedReader)
     communicator.d = xml.NewDecoder(bufio.NewReaderSize(communicator.l, 1024))
+    communicator.e = xml.NewEncoder(TCPConn)
     return communicator
     
 }
@@ -52,12 +57,37 @@ func (c *XMLCommunicator) Connect(laddr, raddr, proto string) error {
     if err != nil {
         return err
     }
-    // Initialize the xml decoder
+    // Initialize the xml decoder and encoder
     c.l = io.LimitReader(c.conn, 1024 * 10).(*io.LimitedReader)
     c.d = xml.NewDecoder(bufio.NewReaderSize(c.l, 1024)) 
-
+    c.e = xml.NewEncoder(c.conn)
+    
+    // Attempt to negotiate an xml stream
+    err = c.NegotiateStream()
+    if err != nil {
+        return err
+    }
     return nil
 } 
+
+// Negotiate an xml stream
+func (c *XMLCommunicator) NegotiateStream() error {
+    // Send an opening element
+    _, err := c.conn.Write([]byte(stream_elements.OpenStream))
+    if err != nil {
+        return err
+    }
+    // Receive the incoming opening element
+    opening, err := c.d.Token()
+    if err != nil {
+        return err
+    }
+    var name string = opening.(*xml.StartElement).Name.Local
+    if name != stream_elements.OpenStream {
+        return errors.New("Invalid opening header!")
+    } 
+    return nil 
+}
 
 // Close the connection
 func (c *XMLCommunicator) Close() error {
@@ -88,18 +118,24 @@ func (c *XMLCommunicator) ReceiveStanza() (stanza.Stanza, error) {
     var stanzaName string = xmlElement.XMLName.Local
     tokenDecoder := xml.NewTokenDecoder(&xmlElement)
     // Determine the type of stanza
+    var msg stanza.Stanza 
     switch stanzaName {
     // Decode the base XML to the specific stanza
     case "message":
-        var msg stanza.Message = stanza.Message{}  
+        msg = stanza.Message{}
         err := tokenDecoder.Decode(&msg)
         if err != nil {
             return nil, err
         }
-        return msg, nil
     }
     // Reset the decoder and limitedReader
-    c.l = io.LimitReader(c.conn, 1024 * 10).(*io.LimitedReader)
+    //c.l = io.LimitReader(c.conn, 1024 * 10).(*io.LimitedReader)
+    c.l.N = 1024 * 10
     c.d = xml.NewDecoder(bufio.NewReaderSize(c.l, 1024))
-    return nil, nil
+    return msg, nil
+}
+
+func (c *XMLCommunicator) SendStanza(msg stanza.Stanza) error {
+    c.e.Encode(msg)
+    return nil
 }
