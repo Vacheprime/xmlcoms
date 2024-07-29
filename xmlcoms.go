@@ -11,27 +11,36 @@ import (
     "github.com/Vacheprime/xmlcoms/stream_elements"
 )
 
+const (
+    DEFAULT_MAXBUFFERSIZE int64 = 10240
+    DEFAULT_BUFIOBUFFERSIZE int = 1024
+)
+
 // Struct used for managing streams of xml elements
 type XMLCommunicator struct {
     conn *net.TCPConn
     d *xml.Decoder
     e *xml.Encoder
     l *io.LimitedReader
+    maxBufferSize int64
 }
 
-//func resetDecoder
+// Reset the limited reader's remaining amount of bytes
+func (c *XMLCommunicator) resetBufferLimit() {
+    c.l.N = c.maxBufferSize
+}
 
 // Create a blank communicator
 func NewXMLCommunicator() *XMLCommunicator {
-    return &XMLCommunicator{conn: nil, d: nil, e: nil, l: nil}
+    return &XMLCommunicator{conn: nil, d: nil, e: nil, l: nil, maxBufferSize: DEFAULT_MAXBUFFERSIZE}
 }
 
 // Initialize an XMLCommunicator from an existing connection. Useful
 // for initializing a communicator from a client connection (server side).
 func NewCommunicatorFromConn(TCPConn *net.TCPConn) *XMLCommunicator {
-    communicator := &XMLCommunicator{conn: TCPConn}
-    communicator.l = io.LimitReader(TCPConn, 1024 * 10).(*io.LimitedReader)
-    communicator.d = xml.NewDecoder(bufio.NewReaderSize(communicator.l, 1024))
+    communicator := &XMLCommunicator{conn: TCPConn, maxBufferSize: DEFAULT_MAXBUFFERSIZE}
+    communicator.l = io.LimitReader(TCPConn, communicator.maxBufferSize).(*io.LimitedReader)
+    communicator.d = xml.NewDecoder(bufio.NewReaderSize(communicator.l, DEFAULT_BUFIOBUFFERSIZE))
     communicator.e = xml.NewEncoder(TCPConn)
     return communicator
     
@@ -58,22 +67,17 @@ func (c *XMLCommunicator) Connect(laddr, raddr, proto string) error {
         return err
     }
     // Initialize the xml decoder and encoder
-    c.l = io.LimitReader(c.conn, 1024 * 10).(*io.LimitedReader)
-    c.d = xml.NewDecoder(bufio.NewReaderSize(c.l, 1024)) 
+    c.l = io.LimitReader(c.conn, c.maxBufferSize).(*io.LimitedReader)
+    c.d = xml.NewDecoder(bufio.NewReaderSize(c.l, DEFAULT_BUFIOBUFFERSIZE)) 
     c.e = xml.NewEncoder(c.conn)
     
-    // Attempt to negotiate an xml stream
-    err = c.NegotiateStream()
-    if err != nil {
-        return err
-    }
     return nil
 } 
 
-// Negotiate an xml stream
-func (c *XMLCommunicator) NegotiateStream() error {
+// Open an xml stream with the server
+func (c *XMLCommunicator) OpenStream() error {
     // Send an opening element
-    _, err := c.conn.Write([]byte(stream_elements.OpenStream))
+    _, err := c.conn.Write([]byte(stream_elements.OpenStreamTag))
     if err != nil {
         return err
     }
@@ -82,60 +86,123 @@ func (c *XMLCommunicator) NegotiateStream() error {
     if err != nil {
         return err
     }
-    var name string = opening.(*xml.StartElement).Name.Local
-    if name != stream_elements.OpenStream {
+    var name string = opening.(xml.StartElement).Name.Local
+
+    if name != stream_elements.OpenStreamName {
         return errors.New("Invalid opening header!")
     } 
     return nil 
 }
 
-// Close the connection
-func (c *XMLCommunicator) Close() error {
-    if c.conn != nil {
-        err := c.conn.Close()
-        if err != nil {
-            return err
-        } else {
-            return nil
-        }
-    } else {
-        return errors.New("The communicator does not possess a connection!")
+// Accept an incoming stream request
+func (c *XMLCommunicator) AcceptStreamOpen() error {
+    // Receive an opening stream and accept it
+    opening, err := c.d.Token()
+    if err != nil {
+        return err
     }
+    var name string = opening.(xml.StartElement).Name.Local
+    if name != stream_elements.OpenStreamName {
+        return errors.New("Invalid opening header!")
+    }
+    // Send an opening element
+    _, err = c.conn.Write([]byte(stream_elements.OpenStreamTag))
+    if err != nil {
+        return err
+    }
+    return nil
+}
+
+// Request closure of the connection
+func (c *XMLCommunicator) RequestCloseStream() error {
+    // Close the connection at the end
+    defer c.conn.Close()
+    // Send a closing element
+    _, err := c.conn.Write([]byte(stream_elements.CloseStreamTag))
+    if err != nil {
+        return err
+    }
+    // Receive the incoming closing element
+    closing, err := c.d.Token()
+    if err != nil {
+        return err
+    }
+    var name string = closing.(xml.EndElement).Name.Local
+
+    if name != stream_elements.CloseStreamName {
+        return errors.New("Invalid closing tag!")
+    } 
+    return nil
+}
+
+// Accept closure of the connection
+func (c *XMLCommunicator) AcceptCloseStream() error {
+    // Close the connection at the end
+    defer c.conn.Close()
+
+    // Send a closing element
+    _, err := c.conn.Write([]byte(stream_elements.CloseStreamTag))
+    if err != nil {
+        return err
+    }
+    return nil
 }
 
 // Receive the next incoming stanza from the server
 func (c *XMLCommunicator) ReceiveStanza() (stanza.Stanza, error) { 
-    // Only attempt to receive if that is possible
-    if c.conn == nil {
-        return nil, errors.New("The communicator does not possess a connection!")
-    }
-    var xmlElement stanza.BaseXML = stanza.BaseXML{} 
-    // Attempt to obtain the next XML element
-    err := c.d.Decode(&xmlElement)
+    // Attempt to obtain the next XML token
+    token, err := c.d.Token()
     if err != nil {
         return nil, err
     }
+    
+    // Determine if the token is an end stream element
+    switch token.(type) {
+    case xml.EndElement:
+        if token.(xml.EndElement).Name.Local == stream_elements.CloseStreamName {
+            err := c.AcceptCloseStream()
+            if err != nil {
+                return nil, err
+            }
+            return nil, io.EOF
+        }
+    }
+
+    startElement := token.(xml.StartElement)
+    var xmlElement stanza.BaseXML = stanza.BaseXML{} 
+
+    // Attempt to obtain the next XML element
+    err = c.d.DecodeElement(&xmlElement, &startElement)
+    if err != nil {
+        return nil, err
+    }
+
     var stanzaName string = xmlElement.XMLName.Local
     tokenDecoder := xml.NewTokenDecoder(&xmlElement)
+
     // Determine the type of stanza
-    var msg stanza.Stanza 
+    var stz stanza.Stanza 
     switch stanzaName {
+
     // Decode the base XML to the specific stanza
     case "message":
-        msg = stanza.Message{}
+        var msg stanza.Message = stanza.Message(stanza.Message{})
         err := tokenDecoder.Decode(&msg)
         if err != nil {
             return nil, err
         }
+        stz = stanza.Stanza(msg)
     }
-    // Reset the decoder and limitedReader
-    //c.l = io.LimitReader(c.conn, 1024 * 10).(*io.LimitedReader)
-    c.l.N = 1024 * 10
-    c.d = xml.NewDecoder(bufio.NewReaderSize(c.l, 1024))
-    return msg, nil
+
+    // Reset the limitedReader
+    c.resetBufferLimit()
+    return stz, nil
 }
 
 func (c *XMLCommunicator) SendStanza(msg stanza.Stanza) error {
-    c.e.Encode(msg)
+    err := c.e.Encode(msg)
+    if err != nil {
+        return err
+    }
     return nil
 }

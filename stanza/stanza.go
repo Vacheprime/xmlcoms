@@ -3,6 +3,7 @@ package stanza
 import (
     "encoding/xml"
     "io"
+
 )
 
 // A general interface to reprensent any type of stanza
