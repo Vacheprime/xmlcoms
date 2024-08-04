@@ -155,7 +155,7 @@ func (c *XMLCommunicator) ReceiveStanza() (stanza.Stanza, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // Determine if the token is an end stream element
     switch token.(type) {
     case xml.EndElement:
@@ -193,7 +193,7 @@ func (c *XMLCommunicator) ReceiveStanza() (stanza.Stanza, error) {
         }
         stz = stanza.Stanza(msg)
     }
-
+    
     // Reset the limitedReader
     c.resetBufferLimit()
     return stz, nil
