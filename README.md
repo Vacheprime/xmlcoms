@@ -2,7 +2,7 @@
 A Go package for XML communication via TCP
 
 ## Prepended strings meaning
-This is to make the reading of RFC 6120 easier to read, by having these
+This is to make the reading of RFC 6120 easier by having these
 prepended streams available while developing :
 
 - C: = a client
