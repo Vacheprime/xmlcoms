@@ -1,5 +1,6 @@
 # xmlcoms
-A Go package for XML communication via TCP
+A Go package for XML communication via TCP using the XMPP protocol.
+This is a learning project, and it is a work in progress.
 
 ## Prepended strings meaning
 This is to make the reading of RFC 6120 easier by having these
