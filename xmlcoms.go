@@ -17,6 +17,11 @@ const (
     DEFAULT_CHANNELBUFFERS int = 50
 )
 
+type StanzaPacket struct {
+    Stanza stanza.Stanza
+    Error error
+}
+
 // Struct used for managing streams of xml elements
 type XMLCommunicator struct {
     conn *net.TCPConn
@@ -25,8 +30,7 @@ type XMLCommunicator struct {
     l *io.LimitedReader
     maxBufferSize int64
     isClosingStream bool
-    StanzaChannel chan stanza.Stanza
-    ErrorChannel chan error
+    StanzaPacketChannel chan StanzaPacket 
 }
 
 // Reset the limited reader's remaining amount of bytes
@@ -36,7 +40,7 @@ func (c *XMLCommunicator) resetBufferLimit() {
 
 // Create a blank communicator
 func NewXMLCommunicator() *XMLCommunicator {
-    return &XMLCommunicator{conn: nil, d: nil, e: nil, l: nil, maxBufferSize: DEFAULT_MAXBUFFERSIZE, isClosingStream: false, StanzaChannel: nil, ErrorChannel: nil}
+    return &XMLCommunicator{conn: nil, d: nil, e: nil, l: nil, maxBufferSize: DEFAULT_MAXBUFFERSIZE, isClosingStream: false, StanzaPacketChannel: nil}
 }
 
 // Initialize an XMLCommunicator from an existing connection. Useful
@@ -48,10 +52,8 @@ func NewCommunicatorFromConn(TCPConn *net.TCPConn) *XMLCommunicator {
     communicator.e = xml.NewEncoder(TCPConn)
 
     // Initialize the channels
-    errorChannel := make(chan error, DEFAULT_CHANNELBUFFERS)
-    stanzaChannel := make(chan stanza.Stanza, DEFAULT_CHANNELBUFFERS)
-    communicator.ErrorChannel = errorChannel
-    communicator.StanzaChannel = stanzaChannel
+    stanzaPacketChannel := make(chan StanzaPacket, DEFAULT_CHANNELBUFFERS)
+    communicator.StanzaPacketChannel = stanzaPacketChannel
 
     return communicator
     
@@ -78,10 +80,8 @@ func (c *XMLCommunicator) Connect(laddr, raddr, proto string) error {
         return err
     }
     // Initialize the channels
-    errorChannel := make(chan error, DEFAULT_CHANNELBUFFERS)
-    stanzaChannel := make(chan stanza.Stanza, DEFAULT_CHANNELBUFFERS)
-    c.ErrorChannel = errorChannel
-    c.StanzaChannel = stanzaChannel
+    stanzaPacketChannel := make(chan StanzaPacket, DEFAULT_CHANNELBUFFERS)
+    c.StanzaPacketChannel = stanzaPacketChannel
 
     // Initialize the xml decoder and encoder
     c.l = io.LimitReader(c.conn, c.maxBufferSize).(*io.LimitedReader)
@@ -222,7 +222,8 @@ func (c *XMLCommunicator) ReceiveStanzas() {
 	// Process the next token
 	token, err := c.processNextToken()
 	if err != nil {
-	    c.ErrorChannel <- err
+	    packet := StanzaPacket{nil, err}
+	    c.StanzaPacketChannel <- packet
 	    break
 	}
 	
@@ -233,20 +234,22 @@ func (c *XMLCommunicator) ReceiveStanzas() {
 	// Attempt to obtain the next XML element
 	err = c.d.DecodeElement(&xmlElement, &startElement)
 	if err != nil {
-	    c.ErrorChannel <- err
+	    packet := StanzaPacket{nil, err}
+	    c.StanzaPacketChannel <- packet
 	    break
 	}
 
 	// Decode the BaseXML into its appropriate stanza
 	stz, err := decodeBaseXML(xmlElement)
 	if err != nil {
-	    c.ErrorChannel <- err
+	    packet := StanzaPacket{nil, err}
+	    c.StanzaPacketChannel <- packet
 	    break
 	}
 	
 	// Reset the limitedReader
 	c.resetBufferLimit()
-	c.StanzaChannel <- stz
+	c.StanzaPacketChannel <- StanzaPacket{stz, nil} 
     }
 }
 

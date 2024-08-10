@@ -14,7 +14,7 @@ type Message struct {
 
 func ConstructMessage(To, From, Body string) Message {
     var messageXMLName xml.Name = xml.Name{Space: "", Local: "message"}
-    var message Message = Message{XMLName: messageXMLName, To: To, Body: Body} 
+    var message Message = Message{XMLName: messageXMLName, To: To, From: From, Body: Body} 
     return message
 }
 
