@@ -2,11 +2,14 @@ package service_discovery
 
 import (
 	"context"
-	"log"
 	"errors"
 	"net"
 	"sort"
-	"strconv"
+)
+
+const (
+    DEFAULT_PORT string = "5222"
+    PROTO string = "tcp"
 )
 
 // Query the SRV records for the receiving entity's domain.
@@ -35,9 +38,6 @@ func LookupServerSRVRecords(domain string) ([]*net.SRV, error) {
 	// TODO: HANDLE TIMEOUTS AND TEMPORARY
 	return nil, err
     }
-    //log.Println("CNAME: " + cname) 
-    log.Println("TOTAL ADDRS: " + strconv.Itoa(len(addrs)))
-    log.Printf("ADDR 0 : %v\n", addrs[0])
 
     // Sort the records
     sortSRVRecords(addrs)
