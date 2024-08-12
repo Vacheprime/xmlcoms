@@ -3,6 +3,7 @@ package service_discovery
 import (
 	"context"
 	"log"
+	"errors"
 	"net"
 	"sort"
 	"strconv"
@@ -12,12 +13,26 @@ import (
 // The returned records are sorted based on Priority and Weight.
 func LookupServerSRVRecords(domain string) ([]*net.SRV, error) {
     var resolver net.Resolver = net.Resolver{PreferGo: true, StrictErrors: false}
-    const service string = "xmpp-client"
-    const proto string = "tcp"
+    const SERVICE string = "xmpp-client"
+    const PROTO string = "tcp"
     
     // TODO: ADD CONTEXT
-    _, addrs, err := resolver.LookupSRV(context.TODO(), service, proto, domain)
+    _, addrs, err := resolver.LookupSRV(context.TODO(), SERVICE, PROTO, domain)
     if err != nil {
+	// Determine if it is a DNSError
+	var dnsError *net.DNSError 
+	var isDNSError bool = errors.As(err, &dnsError)
+	if !isDNSError {
+	    return nil, err
+	}
+
+	// If no records are found, return an
+	// empty slice.
+	if dnsError.IsNotFound {
+	    return []*net.SRV{}, nil
+	}
+
+	// TODO: HANDLE TIMEOUTS AND TEMPORARY
 	return nil, err
     }
     //log.Println("CNAME: " + cname) 
