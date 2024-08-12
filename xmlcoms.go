@@ -4,9 +4,14 @@ import (
 	"bufio"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"os"
+	"strconv"
 
+	"github.com/Vacheprime/xmlcoms/service_discovery"
 	"github.com/Vacheprime/xmlcoms/stanza"
 	"github.com/Vacheprime/xmlcoms/stream_elements"
 )
@@ -31,6 +36,16 @@ type XMLCommunicator struct {
     maxBufferSize int64
     isClosingStream bool
     StanzaPacketChannel chan StanzaPacket 
+    StreamLogger *slog.Logger
+    LogLevel *slog.LevelVar
+}
+
+func (c *XMLCommunicator) initiateLogger() {
+    c.LogLevel = &slog.LevelVar{}
+    c.LogLevel.Set(9) // Default to no logs
+    options := &slog.HandlerOptions{Level: c.LogLevel}
+    handler := slog.NewTextHandler(os.Stdout, options)
+    c.StreamLogger = slog.New(handler)
 }
 
 // Reset the limited reader's remaining amount of bytes
@@ -40,7 +55,9 @@ func (c *XMLCommunicator) resetBufferLimit() {
 
 // Create a blank communicator
 func NewXMLCommunicator() *XMLCommunicator {
-    return &XMLCommunicator{conn: nil, d: nil, e: nil, l: nil, maxBufferSize: DEFAULT_MAXBUFFERSIZE, isClosingStream: false, StanzaPacketChannel: nil}
+    communicator := &XMLCommunicator{conn: nil, d: nil, e: nil, l: nil, maxBufferSize: DEFAULT_MAXBUFFERSIZE, isClosingStream: false, StanzaPacketChannel: nil}
+    communicator.initiateLogger()
+    return communicator
 }
 
 // Initialize an XMLCommunicator from an existing connection. Useful
@@ -54,7 +71,7 @@ func NewCommunicatorFromConn(TCPConn *net.TCPConn) *XMLCommunicator {
     // Initialize the channels
     stanzaPacketChannel := make(chan StanzaPacket, DEFAULT_CHANNELBUFFERS)
     communicator.StanzaPacketChannel = stanzaPacketChannel
-
+    communicator.initiateLogger()
     return communicator
     
 }
@@ -90,6 +107,62 @@ func (c *XMLCommunicator) Connect(laddr, raddr, proto string) error {
     
     return nil
 } 
+
+func (c *XMLCommunicator) ConnectToServer(domain string) error {
+    // First attempt to connect using SRV records
+    records, err := service_discovery.LookupServerSRVRecords(domain)
+    if err != nil {
+	return err
+    }
+    
+    // Attempt fallback resolution and connection if no SRV records are found
+    if len(records) == 0 {
+	c.StreamLogger.Info("No SRV records found, attempting fallback procedure.")
+	// Resolve IPv4 and IPv6 addresses
+	ips, err := service_discovery.ResolveServerIPAddresses(domain)
+	if err != nil {
+	    return err
+	}
+	// Try to connect with every IP
+	for _, ip := range ips {
+	    var address string = net.JoinHostPort(ip.String(), service_discovery.DEFAULT_PORT)
+	    c.StreamLogger.Debug(fmt.Sprintf("Attempting to connect on %v.", address))
+	    err := c.Connect("", address, service_discovery.PROTO) 
+	    if err == nil {
+		c.StreamLogger.Info(fmt.Sprintf("Successfully connected to %v.\n", address))
+		return nil
+	    } else {
+		c.StreamLogger.Debug(fmt.Sprintf("Error connecting to %v : %v\n", address, err))
+	    }
+	}
+    // Attempt normal connection procedure
+    } else {
+	c.StreamLogger.Info("SRV records found, attempting to connect.")
+	// Go through every record and attempt to connect
+	for _, record := range records {
+	    var port string = strconv.Itoa(int(record.Port))
+	    var target string = record.Target
+	    ips, err := service_discovery.ResolveServerIPAddresses(target)
+	    if err != nil {
+		return err
+	    }
+
+	    // For every record, attempt to connect to all associated IP addresses
+	    for _, ip := range ips {
+		var address string = net.JoinHostPort(ip.String(), port)
+		c.StreamLogger.Debug(fmt.Sprintf("Attempting to connect on %v.", address))
+		err := c.Connect("", address, service_discovery.PROTO)
+		if err == nil {
+		    c.StreamLogger.Info(fmt.Sprintf("Successfully connected to %v.", address))
+		    return nil
+		} else {
+		    c.StreamLogger.Debug(fmt.Sprintf("Error connecting to %v : %v.", address, err))
+		}
+	    }
+	}
+    }
+    return errors.New("Unable to connect")
+}
 
 // Open an xml stream with the server
 func (c *XMLCommunicator) OpenStream() error {
